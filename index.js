@@ -117,6 +117,40 @@ app.get("/api/profile/me", authMiddleware, async (req, res) => {
   }
 });
 
+app.put('/api/profile/me', authMiddleware, async (req, res) => {
+  try {
+    const { name, about, avatarUrl, phoneNumber } = req.body;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { name, about, avatarUrl, phoneNumber },
+      { new: true }
+    ).select('-password');
+
+    if (!updatedUser) {
+      return res.status(404).json({ msg: 'User not found' });
+    }
+
+    // ✅ Emit "profile_updated" event via Socket.io
+    const io = req.app.get('io'); // Make sure you set this in server.js
+    if (io) {
+      io.emit('profile_updated', {
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        about: updatedUser.about,
+        avatarUrl: updatedUser.avatarUrl,
+        phoneNumber: updatedUser.phoneNumber,
+      });
+    }
+
+    res.json(updatedUser);
+  } catch (error) {
+    console.error('Error updating profile:', error);
+    res.status(500).send('Server Error');
+  }
+});
+
+
 app.get('/api/messages/:otherUserId', authMiddleware, async (req, res) => {
   try {
     const myUserId = req.user.id;
@@ -132,6 +166,115 @@ app.get('/api/messages/:otherUserId', authMiddleware, async (req, res) => {
     console.error('Error fetching messages:', error);
     res.status(500).json({ message: 'Server error' });
   }
+});
+
+app.get('/api/users/search', authMiddleware, async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ message: 'Email query is required' });
+    }
+    const users = await User.find({ 
+      email: { $regex: email, $options: 'i' },
+      _id: { $ne: req.user.id }
+    }).select('-password');
+    res.json(users);
+  } catch (error) {
+    console.error('User Search Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/contact-requests/send/:userId', authMiddleware, async (req, res) => {
+  try {
+    const toUser = req.params.userId;
+    const fromUser = req.user.id;
+    
+    if (toUser === fromUser) {
+        return res.status(400).json({ message: 'You cannot send a contact request to yourself.' });
+    }
+
+    const sender = await User.findById(fromUser);
+    if (sender.contacts.includes(toUser)) {
+      return res.status(400).json({ message: 'User is already in your contacts.' });
+    }
+
+    const existingRequest = await ContactRequest.findOne({
+      $or: [
+        { fromUser: fromUser, toUser: toUser },
+        { fromUser: toUser, toUser: fromUser }
+      ]
+    });
+    if (existingRequest) {
+      return res.status(400).json({ message: 'A contact request already exists between you and this user.' });
+    }
+
+    const newRequest = new ContactRequest({ fromUser, toUser });
+    await newRequest.save();
+    res.status(201).json({ message: 'Contact request sent successfully.' });
+  } catch (error) {
+    console.error('Send Request Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/contact-requests/:requestId/respond', authMiddleware, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { response } = req.body; // 'accept' or 'decline'
+    const toUser = req.user.id;
+
+    const request = await ContactRequest.findById(requestId);
+    if (!request || request.toUser.toString() !== toUser) {
+      return res.status(404).json({ message: 'Request not found or you are not authorized.' });
+    }
+
+    if (response === 'accept') {
+      request.status = 'accepted';
+      await request.save();
+
+      await User.findByIdAndUpdate(toUser, { $addToSet: { contacts: request.fromUser } });
+      await User.findByIdAndUpdate(request.fromUser, { $addToSet: { contacts: toUser } });
+      
+      return res.json({ message: 'Contact request accepted.' });
+    } else if (response === 'decline') {
+      request.status = 'declined';
+      await request.save();
+      return res.json({ message: 'Contact request declined.' });
+    } else {
+      return res.status(400).json({ message: 'Invalid response.' });
+    }
+  } catch (error) {
+    console.error('Respond to Request Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/contact-requests/pending', authMiddleware, async (req, res) => {
+  try {
+    const requests = await ContactRequest.find({
+      toUser: req.user.id,
+      status: 'pending'
+    }).populate('fromUser', 'name email avatarUrl');
+    res.json(requests);
+  } catch (error) {
+    console.error('Get Pending Requests Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+app.post('/api/profile/avatar', authMiddleware, (req, res) => {
+  const uploader = upload.single('avatar');
+  uploader(req, res, function (err) {
+    if (err) {
+      console.error('--- CLOUDINARY UPLOAD ERROR ---');
+      console.error(err);
+      return res.status(500).json({ message: 'File upload failed.', error: err.message });
+    }
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded.' });
+    res.json({ avatarUrl: req.file.path });
+  });
 });
 
 
