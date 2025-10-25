@@ -2,9 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
+import cors from "cors";
 const cors = require("cors");
+
 app.use(cors({
-  origin: ["http://localhost:5173", "https://your-frontend-name.vercel.app"],
+  origin: [
+    "http://localhost:5173",  // local dev
+    "https://chitchat-frontend-mu.vercel.app" // ✅ your deployed frontend
+  ],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
@@ -273,12 +278,12 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: [
-      "http://localhost:5173", // for local development
-      "https://your-frontend-name.vercel.app" // replace with your actual deployed frontend URL
+      "http://localhost:5173",
+      "https://chitchat-frontend-mu.vercel.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true, // allow cookies or tokens if needed
-  }
+    credentials: true,
+  },
 });
 
 
