@@ -118,6 +118,24 @@ app.get("/api/profile/me", authMiddleware, async (req, res) => {
   }
 });
 
+app.get('/api/messages/:otherUserId', authMiddleware, async (req, res) => {
+  try {
+    const myUserId = req.user.id;
+    const otherUserId = req.params.otherUserId;
+    const messages = await Message.find({
+      $or: [
+        { sender: myUserId, recipient: otherUserId },
+        { sender: otherUserId, recipient: myUserId }
+      ],
+    }).sort({ createdAt: 'asc' });
+    res.json(messages);
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
 // --- Server + Socket.io Setup ---
 const server = http.createServer(app);
 const io = new Server(server, {
