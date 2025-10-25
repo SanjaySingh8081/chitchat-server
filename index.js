@@ -2,7 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
-const cors = require('cors');
+const cors = require("cors");
+app.use(cors({
+  origin: ["http://localhost:5173", "https://your-frontend-name.vercel.app"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
+}));
+
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -266,10 +272,15 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+    origin: [
+      "http://localhost:5173", // for local development
+      "https://your-frontend-name.vercel.app" // replace with your actual deployed frontend URL
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true, // allow cookies or tokens if needed
+  }
 });
+
 
 // ✅ Make io available globally to Express routes
 app.set('io', io);
