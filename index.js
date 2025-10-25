@@ -417,5 +417,7 @@ socket.on("delete_message", async (messageId) => {
 });
 
 // --- Server Start ---
-const PORT = 3001;
-server.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
+// --- Server Start ---
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
