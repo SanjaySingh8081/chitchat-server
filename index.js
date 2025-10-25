@@ -23,16 +23,15 @@ const app = express();
 app.use(express.json());
 
 // --- CORS Setup ---
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173", // Local dev
-      "https://chitchat-frontend-mu.vercel.app", // ✅ Your deployed frontend
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: [
+    "http://localhost:5173", 
+    "https://chitchat-frontend-mu.vercel.app" // ✅ your real frontend URL
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "x-auth-token"],
+  credentials: true,
+}));
 
 // --- Database Connection ---
 const MONGO_URI =
@@ -138,14 +137,16 @@ app.get('/api/messages/:otherUserId', authMiddleware, async (req, res) => {
 
 // --- Server + Socket.io Setup ---
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
     origin: [
-      "http://localhost:5173",
-      "https://chitchat-frontend-mu.vercel.app",
+      "http://localhost:5173", // local dev
+      "https://chitchat-frontend-mu.vercel.app", // deployed frontend ✅
     ],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // ✅ added OPTIONS
+    allowedHeaders: ["Content-Type", "x-auth-token"], // ✅ allow auth + JSON
+    credentials: true, // ✅ allow cookies/tokens if ever needed
   },
 });
 
