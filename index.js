@@ -93,20 +93,45 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-// --- Basic APIs (Contacts, Requests, Profile) ---
 app.get("/api/contacts", authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).populate(
-      "contacts",
-      "-password -__v"
+    const myUserId = req.user.id;
+
+    // Get current user's accepted contacts
+    const myUser = await User.findById(myUserId).populate("contacts", "name email avatarUrl isOnline lastSeen");
+    if (!myUser) return res.status(404).json({ message: "User not found" });
+
+    // Build contact list with last message time
+    const contactData = await Promise.all(
+      myUser.contacts.map(async (contact) => {
+        const lastMessage = await Message.findOne({
+          $or: [
+            { sender: myUserId, recipient: contact._id },
+            { sender: contact._id, recipient: myUserId },
+          ],
+        })
+          .sort({ createdAt: -1 })
+          .select("createdAt");
+
+        return {
+          ...contact.toObject(),
+          lastMessageAt: lastMessage ? lastMessage.createdAt : null,
+        };
+      })
     );
-    if (!user) return res.status(404).json({ message: "User not found" });
-    res.json(user.contacts);
+
+    // Sort by most recent message
+    contactData.sort(
+      (a, b) => new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0)
+    );
+
+    res.json(contactData);
   } catch (error) {
-    console.error("Get Contacts Error:", error);
+    console.error("Error fetching contacts:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 app.get("/api/profile/me", authMiddleware, async (req, res) => {
   try {
@@ -262,7 +287,6 @@ app.get('/api/contact-requests/pending', authMiddleware, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 app.post('/api/profile/avatar', authMiddleware, (req, res) => {
   const uploader = upload.single('avatar');
