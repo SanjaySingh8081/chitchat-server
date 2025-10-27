@@ -97,30 +97,33 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
   try {
     const myUserId = req.user.id;
 
-    // Get current user's accepted contacts
-    const myUser = await User.findById(myUserId).populate("contacts", "name email avatarUrl isOnline lastSeen");
-    if (!myUser) return res.status(404).json({ message: "User not found" });
+    // Find all accepted contacts
+    const contacts = await User.find({
+      _id: { $ne: myUserId }
+    }).select("name email avatarUrl isOnline lastSeen");
 
-    // Build contact list with last message time
+    // Fetch the latest message between each contact and the current user
     const contactData = await Promise.all(
-      myUser.contacts.map(async (contact) => {
+      contacts.map(async (user) => {
         const lastMessage = await Message.findOne({
           $or: [
-            { sender: myUserId, recipient: contact._id },
-            { sender: contact._id, recipient: myUserId },
+            { sender: myUserId, recipient: user._id },
+            { sender: user._id, recipient: myUserId },
           ],
         })
           .sort({ createdAt: -1 })
-          .select("createdAt");
+          .select("content sender createdAt");
 
         return {
-          ...contact.toObject(),
+          ...user.toObject(),
           lastMessageAt: lastMessage ? lastMessage.createdAt : null,
+          lastMessageContent: lastMessage ? lastMessage.content : "",
+          lastMessageFromMe: lastMessage ? lastMessage.sender.toString() === myUserId : false,
         };
       })
     );
 
-    // Sort by most recent message
+    // Sort contacts by latest message time
     contactData.sort(
       (a, b) => new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0)
     );
@@ -131,6 +134,7 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 
 app.get("/api/profile/me", authMiddleware, async (req, res) => {
