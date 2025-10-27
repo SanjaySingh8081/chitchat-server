@@ -97,12 +97,16 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
   try {
     const myUserId = req.user.id;
 
-    // Find all accepted contacts
-    const contacts = await User.find({
-      _id: { $ne: myUserId }
-    }).select("name email avatarUrl isOnline lastSeen");
+    // Find current user with their accepted contacts list
+    const me = await User.findById(myUserId).populate("contacts", "name email avatarUrl isOnline lastSeen");
 
-    // Fetch the latest message between each contact and the current user
+    if (!me || !me.contacts || me.contacts.length === 0) {
+      return res.json([]); // no contacts yet
+    }
+
+    const contacts = me.contacts;
+
+    // Fetch the latest message between current user and each contact
     const contactData = await Promise.all(
       contacts.map(async (user) => {
         const lastMessage = await Message.findOne({
@@ -123,7 +127,7 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
       })
     );
 
-    // Sort contacts by latest message time
+    // Sort by last message time (latest first)
     contactData.sort(
       (a, b) => new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0)
     );
@@ -132,17 +136,6 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Error fetching contacts:", error);
     res.status(500).json({ message: "Server error" });
-  }
-});
-
-
-
-app.get("/api/profile/me", authMiddleware, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select("-password");
-    res.json(user);
-  } catch (error) {
-    res.status(500).send("Server Error");
   }
 });
 
@@ -178,6 +171,21 @@ app.put('/api/profile/me', authMiddleware, async (req, res) => {
     res.status(500).send('Server Error');
   }
 });
+
+// --- Get Current User Profile ---
+app.get('/api/profile/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json(user);
+  } catch (error) {
+    console.error('Error fetching profile:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 
 app.get('/api/messages/:otherUserId', authMiddleware, async (req, res) => {
@@ -350,25 +358,66 @@ io.on("connection", async (socket) => {
 
   socket.broadcast.emit("user_online", { userId: socket.userId });
 
-  // --- Handle Sending Messages ---
-  socket.on("send_message", async (data) => {
-    try {
-      const newMessage = new Message({
-        sender: socket.userId,
-        recipient: data.recipientId,
-        content: data.content,
+  socket.on("message_status_update", (data) => {
+  console.log("📩 Message status updated:", data);
+});
+
+
+  
+ // --- Handle Sending Messages (with status tracking) ---
+// --- Handle Sending Messages (WhatsApp-style status tracking) ---
+socket.on("send_message", async (data) => {
+  try {
+    const { recipientId, content } = data;
+
+    // 1️⃣ Create new message with default "sent" status
+    const newMessage = new Message({
+      sender: socket.userId,
+      recipient: recipientId,
+      content,
+      status: "sent",
+      sentAt: new Date(),
+    });
+
+    const savedMessage = await newMessage.save();
+
+    // 2️⃣ Always send message to the sender’s chat window
+    io.to(socket.id).emit("receive_message", savedMessage);
+
+    // 3️⃣ Check if recipient is online
+    const recipientSocketId = onlineUsers[recipientId];
+
+    if (recipientSocketId) {
+      // ✅ Mark as "delivered"
+      savedMessage.status = "delivered";
+      savedMessage.deliveredAt = new Date();
+      await savedMessage.save();
+
+      // ✅ Send message to recipient immediately
+      io.to(recipientSocketId).emit("receive_message", {
+        ...savedMessage.toObject(),
+        status: "delivered",
       });
-      const savedMessage = await newMessage.save();
 
-      const recipientSocketId = onlineUsers[data.recipientId];
-      if (recipientSocketId)
-        io.to(recipientSocketId).emit("receive_message", savedMessage);
-
-      io.to(socket.id).emit("receive_message", savedMessage);
-    } catch (error) {
-      console.error("❌ Error saving or sending message:", error);
+      // ✅ Notify sender that message was delivered
+      io.to(socket.id).emit("message_status_update", {
+        messageId: savedMessage._id,
+        status: "delivered",
+        chatWith: recipientId,
+      });
+    } else {
+      // ❌ Recipient offline → stays "sent"
+      io.to(socket.id).emit("message_status_update", {
+        messageId: savedMessage._id,
+        status: "sent",
+        chatWith: recipientId,
+      });
     }
-  });
+  } catch (error) {
+    console.error("❌ Error saving or sending message:", error);
+  }
+});
+
 
   // --- Handle Typing Notifications ---
   socket.on("typing", (data) => {
@@ -378,6 +427,44 @@ io.on("connection", async (socket) => {
         senderId: socket.userId,
       });
   });
+
+// --- Handle mark_seen event (only when user opens the chat) ---
+socket.on("mark_seen", async ({ chatWith }) => {
+  try {
+    if (!chatWith) return;
+
+    // 1️⃣ Update only messages that were delivered but not yet seen
+    const unseenMessages = await Message.find({
+      sender: chatWith,
+      recipient: socket.userId,
+      status: { $ne: "seen" },
+    });
+
+    if (unseenMessages.length > 0) {
+      // Mark them as seen
+      await Message.updateMany(
+        { _id: { $in: unseenMessages.map((m) => m._id) } },
+        { $set: { status: "seen" } }
+      );
+
+      // 2️⃣ Notify sender for each seen message
+      const senderSocket = onlineUsers[chatWith];
+      if (senderSocket) {
+        unseenMessages.forEach((msg) => {
+          io.to(senderSocket).emit("message_status_update", {
+            messageId: msg._id,
+            status: "seen",
+            chatWith: socket.userId,
+          });
+        });
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error in mark_seen:", error);
+  }
+});
+
+
 
   // --- Handle Message Deletion ---
   socket.on("delete_message", async (messageId) => {
